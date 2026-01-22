@@ -31,7 +31,8 @@ from anthropic import Anthropic
 # - Image filtering, use only 3 recent images
 # - Ensure history / messages format is consistent
 # - Implement more actions (find, etc)
-# Some commands don't have screenshots
+# Some commands don't have screenshots,
+# other todos
 
 
 class ClaudeAgent:
