@@ -32,6 +32,7 @@ dependencies = [
     "pyyaml",
     "jsonschema",
     "browserbase",
+    "anthropic>=0.71.0",
 ]
 
 
@@ -49,6 +50,7 @@ ollama = ["ollama"]
 
 [project.scripts]
 fara-cli = "fara.run_fara:main"
+claude-cli = "fara.run_claude:main"
 
 
 [tool.uv]

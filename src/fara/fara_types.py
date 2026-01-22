@@ -76,6 +76,44 @@ class FunctionCall:
     arguments: Dict[str, Any]
 
 
+def message_to_anthropic_format(message: LLMMessage) -> Dict[str, Any]:
+    """Convert our LLMMessage to OpenAI API format"""
+    role = (
+        "system"
+        if isinstance(message, SystemMessage)
+        else "assistant"
+        if isinstance(message, AssistantMessage)
+        else "user"
+    )
+
+    # Handle multimodal content (text + images)
+    if isinstance(message.content, list):
+        content_parts = []
+        for item in message.content:
+            if isinstance(item, ImageObj):
+                # Convert image to base64 data URL
+                base64_image = item.to_base64()
+                content_parts.append(
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "image/png",
+                            "data": base64_image,
+                        },
+                    }
+                )
+            elif isinstance(item, str):
+                content_parts.append({"type": "text", "text": item})
+            elif isinstance(item, dict):
+                # Already in proper format
+                content_parts.append(item)
+        return {"role": role, "content": content_parts}
+    else:
+        # Simple text content
+        return {"role": role, "content": message.content}
+
+
 def message_to_openai_format(message: LLMMessage) -> Dict[str, Any]:
     """Convert our LLMMessage to OpenAI API format"""
     role = (
