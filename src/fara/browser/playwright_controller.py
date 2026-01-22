@@ -501,6 +501,20 @@ class PlaywrightController:
 
         await page.keyboard.type(value)
 
+    async def get_page_text(self, page: Page) -> str:
+        """
+        Get the visible text content of the page.
+
+        Args:
+            page (Page): The Playwright page object.
+
+        Returns:
+            str: The visible text content of the page.
+        """
+        await self._ensure_page_ready(page)
+        content = await page.evaluate("document.body.innerText")
+        return content
+
     @handle_target_closed()
     async def fill_coords(
         self,

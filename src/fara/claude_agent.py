@@ -1,5 +1,6 @@
 from datetime import datetime
 from typing import Any
+from unittest import result
 from playwright.async_api import Page
 import logging
 import json
@@ -15,14 +16,11 @@ from playwright.async_api import BrowserContext
 import asyncio
 from anthropic.types import TextBlock
 from .browser.playwright_controller import PlaywrightController
-from ._prompts import get_computer_use_system_prompt
 from .fara_types import (
     LLMMessage,
-    SystemMessage,
     UserMessage,
     AssistantMessage,
     ImageObj,
-    ModelResponse,
     FunctionCall,
     message_to_anthropic_format,
     WebSurferEvent,
@@ -419,24 +417,6 @@ If DOM-based actions (refs) aren't working, fall back to screenshot + coordinate
 
     #     return system_message, scaled_screenshot
 
-    def _parse_thoughts_and_action(self, message: str) -> Tuple[str, Dict[str, Any]]:
-        try:
-            tmp = message.split("<tool_call>\n")
-            thoughts = tmp[0].strip()
-            action_text = tmp[1].split("\n</tool_call>")[0]
-            try:
-                action = json.loads(action_text)
-            except json.decoder.JSONDecodeError:
-                self.logger.error(f"Invalid action text: {action_text}")
-                action = ast.literal_eval(action_text)
-
-            return thoughts, action
-        except Exception as e:
-            self.logger.error(
-                f"Error parsing thoughts and action: {message}", exc_info=True
-            )
-            raise e
-
     async def run(self, user_message: str) -> Tuple:
         """Run the agent with a user message."""
         # Initialize if not already done
@@ -468,6 +448,7 @@ If DOM-based actions (refs) aren't working, fall back to screenshot + coordinate
         all_observations = []
         final_answer = "<no_answer>"
         prior_tool_use = None
+        prior_tool_output = None
         for i in range(self.max_rounds):
             is_first_round = i == 0
             if not self.browser_manager._captcha_event.is_set():
@@ -485,6 +466,7 @@ If DOM-based actions (refs) aren't working, fall back to screenshot + coordinate
                 is_first_round,
                 screenshot if is_first_round else None,
                 prior_tool_result=prior_tool_use,
+                prior_tool_output=prior_tool_output,
             )
 
             if text_response is not None:
@@ -500,12 +482,13 @@ If DOM-based actions (refs) aren't working, fall back to screenshot + coordinate
                 (
                     _,
                     _,
-                    action_description,
+                    tool_output,
                 ) = await self.execute_action(function_calls)
+                prior_tool_output = tool_output
 
-                all_observations.append(action_description)
-                self.logger.debug(f"Observation#{i+1}: {action_description}")
-                print(f"Observation#{i+1}: {action_description}")
+                all_observations.append(tool_output)
+                self.logger.debug(f"Observation#{i+1}: {tool_output}")
+                print(f"Observation#{i+1}: {tool_output}")
 
             if tool_use is None:
                 final_answer = text_response
@@ -517,6 +500,7 @@ If DOM-based actions (refs) aren't working, fall back to screenshot + coordinate
         is_first_round: bool,
         first_screenshot: Image.Image | None = None,
         prior_tool_result: dict | None = None,
+        prior_tool_output: dict | None = None,
     ) -> Tuple[List[FunctionCall], str]:
         # screenshot_for_system = first_screenshot
         if not is_first_round:
@@ -524,10 +508,10 @@ If DOM-based actions (refs) aren't working, fall back to screenshot + coordinate
             screenshot = await self._get_screenshot()
             # screenshot_for_system = screenshot
 
-            text_prompt = self.USER_MESSAGE
-            curr_url = await self._playwright_controller.get_page_url(self._page)
-            trimmed_url = get_trimmed_url(curr_url, max_len=self.max_url_chars)
-            text_prompt = f"Current URL: {trimmed_url}\n" + text_prompt
+            # text_prompt = self.USER_MESSAGE
+            # curr_url = await self._playwright_controller.get_page_url(self._page)
+            # trimmed_url = get_trimmed_url(curr_url, max_len=self.max_url_chars)
+            # text_prompt = f"Current URL: {trimmed_url}\n" + text_prompt
 
             curr_message = UserMessage(
                 content=[
@@ -543,7 +527,7 @@ If DOM-based actions (refs) aren't working, fall back to screenshot + coordinate
                                     "data": ImageObj.from_pil(screenshot).to_base64(),
                                 },
                             },
-                            {"type": "text", "text": text_prompt},
+                            {"type": "text", "text": prior_tool_output},
                         ],
                     }
                 ]
@@ -749,7 +733,27 @@ If DOM-based actions (refs) aren't working, fall back to screenshot + coordinate
         # elif args["action"] == "stop" or args["action"] == "terminate":
         #     action_description = args.get("thoughts")
         #     is_stop_action = True
+        elif args["action"] == "read_page":
+            text = await self._playwright_controller.get_page_text(self._page)
 
+            full_content = str(text)
+
+            # Calculate content size for summary
+            content_length = len(full_content)
+            # Estimate token count
+            # Note: For exact counts, use client.beta.messages.count_tokens API
+            # This estimate uses ~3.5 chars/token which is typical for Claude with English text
+            # Actual ratio varies by content type (code, languages, special characters)
+            estimated_tokens = int(content_length / 3.5)
+
+            # Create a summary for UI display
+            title = result.get("title", "N/A") if isinstance(result, dict) else "N/A"
+            url = result.get("url", "N/A") if isinstance(result, dict) else "N/A"
+            summary = f"Extracted page text from: {title}\nURL: {url}\n(~{estimated_tokens:,} tokens, {content_length:,} characters)"
+
+            action_description = (
+                f"__TEXT_EXTRACTED__\n{summary}\n__FULL_CONTENT__\n{text}"
+            )
         else:
             raise ValueError(f"Unknown tool: {args['action']}")
 
