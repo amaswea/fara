@@ -733,10 +733,27 @@ If DOM-based actions (refs) aren't working, fall back to screenshot + coordinate
         # elif args["action"] == "stop" or args["action"] == "terminate":
         #     action_description = args.get("thoughts")
         #     is_stop_action = True
-        elif args["action"] == "read_page":
-            text = await self._playwright_controller.get_page_text(self._page)
 
-            full_content = str(text)
+        elif args["action"] == "screenshot":
+            action_description = "Took a screenshot of the current page."
+
+        elif args["action"] == "execute_js":
+            js_code = str(args.get("text", ""))
+            js_result = await self._playwright_controller.execute_script(
+                self._page, js_code
+            )
+            action_description = f"Executed JavaScript code. Result: {js_result}"
+
+        elif args["action"] == "read_page":
+            dom_tree = await self._playwright_controller.get_page_dom(self._page)
+
+            # The script returns {pageContent: string}, extract just the pageContent
+            if isinstance(dom_tree, dict) and "pageContent" in dom_tree:
+                full_content = dom_tree["pageContent"]
+            elif isinstance(dom_tree, dict):
+                full_content = json.dumps(dom_tree, indent=2)
+            else:
+                full_content = str(dom_tree)
 
             # Calculate content size for summary
             content_length = len(full_content)
@@ -747,12 +764,30 @@ If DOM-based actions (refs) aren't working, fall back to screenshot + coordinate
             estimated_tokens = int(content_length / 3.5)
 
             # Create a summary for UI display
-            title = result.get("title", "N/A") if isinstance(result, dict) else "N/A"
             url = result.get("url", "N/A") if isinstance(result, dict) else "N/A"
-            summary = f"Extracted page text from: {title}\nURL: {url}\n(~{estimated_tokens:,} tokens, {content_length:,} characters)"
+            summary = f"Extracted page DOM tree (~{estimated_tokens:,} tokens, {content_length:,} characters)"
 
             action_description = (
-                f"__TEXT_EXTRACTED__\n{summary}\n__FULL_CONTENT__\n{text}"
+                f"__PAGE_EXTRACTED__\n{summary}\n__FULL_CONTENT__\n{full_content}"
+            )
+        elif args["action"] == "get_page_text":
+            text = await self._playwright_controller.get_page_text(self._page)
+
+            # Calculate content size for summary
+            content_length = len(text)
+
+            # Estimate token count
+            # Note: For exact counts, use client.beta.messages.count_tokens API
+            # This estimate uses ~3.5 chars/token which is typical for Claude with English text
+            # Actual ratio varies by content type (code, languages, special characters)
+            estimated_tokens = int(content_length / 3.5)
+
+            # Create a summary for UI display
+            url = result.get("url", "N/A") if isinstance(result, dict) else "N/A"
+            summary = f"Extracted page text from \nURL: {url}\n(~{estimated_tokens:,} tokens, {content_length:,} characters)"
+
+            action_description = (
+                f"__PAGE_EXTRACTED__\n{summary}\n__FULL_CONTENT__\n{text}"
             )
         else:
             raise ValueError(f"Unknown tool: {args['action']}")

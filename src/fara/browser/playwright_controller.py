@@ -1,6 +1,8 @@
 import asyncio
 import base64
+from fileinput import filename
 import os
+from pathlib import Path
 import random
 import logging
 import functools
@@ -514,6 +516,50 @@ class PlaywrightController:
         await self._ensure_page_ready(page)
         content = await page.evaluate("document.body.innerText")
         return content
+
+    async def get_page_dom(self, page: Page, filter_type: str = "all") -> str:
+        """
+        Get the DOM structure of the page.
+
+        Args:
+            page (Page): The Playwright page object.
+
+        Returns:
+            str: The DOM structure of the page.
+        """
+        await self._ensure_page_ready(page)
+
+        script_path = os.path.join(os.path.dirname(__file__), "browser_dom_script.js")
+        if not os.path.exists(script_path):
+            raise RuntimeError(f"Script file not found: {script_path}")
+
+        script = Path(script_path).read_text()
+
+        # The DOM script defines window.__generateAccessibilityTree function
+        # We need to inject it and then call it
+        combined_expression = f"""
+            (function() {{
+                {script}
+                return window.__generateAccessibilityTree('{filter_type}');
+            }})()
+        """
+        dom_tree = await page.evaluate(combined_expression)
+        return dom_tree
+
+    async def execute_script(self, page: Page, script: str) -> Any:
+        """
+        Execute arbitrary JavaScript on the page.
+
+        Args:
+            page (Page): The Playwright page object.
+            script (str): The JavaScript code to execute.
+
+        Returns:
+            Any: The result of the executed script.
+        """
+        await self._ensure_page_ready(page)
+        result = await page.evaluate(script)
+        return result
 
     @handle_target_closed()
     async def fill_coords(
