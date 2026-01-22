@@ -303,11 +303,6 @@ If DOM-based actions (refs) aren't working, fall back to screenshot + coordinate
             "input_schema": self.BROWSER_TOOL_INPUT_SCHEMA,
         }
 
-        print(
-            "Using model:",
-            self.client_config.get("model", "claude-sonnet-4-5-20250929"),
-        )
-
         api_kwargs = {
             "max_tokens": self.MAX_TOKENS,
             "messages": messages,
@@ -472,6 +467,7 @@ If DOM-based actions (refs) aren't working, fall back to screenshot + coordinate
         all_actions = []
         all_observations = []
         final_answer = "<no_answer>"
+        prior_tool_use = None
         for i in range(self.max_rounds):
             is_first_round = i == 0
             if not self.browser_manager._captcha_event.is_set():
@@ -486,12 +482,15 @@ If DOM-based actions (refs) aren't working, fall back to screenshot + coordinate
                     )
 
             tool_use, text_response = await self.generate_model_call(
-                is_first_round, screenshot if is_first_round else None
+                is_first_round,
+                screenshot if is_first_round else None,
+                prior_tool_result=prior_tool_use,
             )
 
             if text_response is not None:
                 all_actions.append(text_response)
 
+            prior_tool_use = tool_use
             if tool_use is not None:
                 function_calls = [
                     FunctionCall(
@@ -514,10 +513,11 @@ If DOM-based actions (refs) aren't working, fall back to screenshot + coordinate
         return final_answer, all_actions, all_observations
 
     async def generate_model_call(
-        self, is_first_round: bool, first_screenshot: Image.Image | None = None
+        self,
+        is_first_round: bool,
+        first_screenshot: Image.Image | None = None,
+        prior_tool_result: dict | None = None,
     ) -> Tuple[List[FunctionCall], str]:
-        history = self._chat_history
-
         # screenshot_for_system = first_screenshot
         if not is_first_round:
             # Get screenshot and add new user message for subsequent rounds
@@ -530,10 +530,29 @@ If DOM-based actions (refs) aren't working, fall back to screenshot + coordinate
             text_prompt = f"Current URL: {trimmed_url}\n" + text_prompt
 
             curr_message = UserMessage(
-                content=[ImageObj.from_pil(screenshot), text_prompt]
+                content=[
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": prior_tool_result.id,
+                        "content": [
+                            {
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": "image/png",
+                                    "data": ImageObj.from_pil(screenshot).to_base64(),
+                                },
+                            },
+                            {"type": "text", "text": text_prompt},
+                        ],
+                    }
+                ]
             )
+
+            # curr_message = UserMessage(
+            #     content=[ImageObj.from_pil(screenshot), text_prompt]
+            # )
             self._chat_history.append(curr_message)
-            history.append(curr_message)
 
         # Generate system message using the screenshot
 
@@ -541,9 +560,8 @@ If DOM-based actions (refs) aren't working, fall back to screenshot + coordinate
         # system_message, _ = self._get_system_message(screenshot_for_system)
         # history = system_message + history
         response = await self._make_model_call(
-            history, extra_create_args={"temperature": 0}
+            self._chat_history, extra_create_args={"temperature": 0}
         )
-        print("Model response:", response)
 
         # Append assistant message to chat history
         text_response = next(
@@ -563,12 +581,18 @@ If DOM-based actions (refs) aren't working, fall back to screenshot + coordinate
             assistant_content.append({"type": "text", "text": text_response})
         if tool_use is not None:
             assistant_content.append(
-                {"type": tool_use.type, "name": tool_use.name, "input": tool_use.input}
+                {
+                    "type": tool_use.type,
+                    "id": tool_use.id,
+                    "name": tool_use.name,
+                    "input": tool_use.input,
+                }
             )
         self._chat_history.append(AssistantMessage(content=assistant_content))
 
-        print("Tool use:", tool_use)
-        print("Text response:", text_response)
+        print("\n---Current Step ---")
+        print("Tool:", tool_use)
+        print("Text:", text_response)
 
         return tool_use, text_response
 
