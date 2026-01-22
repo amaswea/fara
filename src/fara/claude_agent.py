@@ -4,7 +4,6 @@ from unittest import result
 from playwright.async_api import Page
 import logging
 import json
-import ast
 import io
 import os
 from PIL import Image
@@ -27,30 +26,15 @@ from .fara_types import (
 )
 from anthropic import Anthropic
 
-from .utils import get_trimmed_url
-
 
 # TODO
 # - Image filtering, use only 3 recent images
-# - Add page text / dom
-# - Ensure history / messages format
-# - Implement more actions
+# - Ensure history / messages format is consistent
+# - Implement more actions (find, etc)
 
 
 class ClaudeAgent:
     DEFAULT_START_PAGE = "https://www.bing.com/"
-
-    MLM_PROCESSOR_IM_CFG = {
-        "min_pixels": 3136,
-        "max_pixels": 12845056,
-        "patch_size": 14,
-        "merge_size": 2,
-    }
-
-    SCREENSHOT_TOKENS = 1105
-    USER_MESSAGE = "Here is the next screenshot. Think about what to do next."
-    MAX_URL_LENGTH = 100
-    MAX_TOKENS = 4096
 
     SYSTEM_PROMPT = f"""<SYSTEM_CAPABILITY>
 * You control a Chromium browser via Playwright automation.
@@ -395,28 +379,6 @@ If DOM-based actions (refs) aren't working, fall back to screenshot + coordinate
         screenshot = Image.open(io.BytesIO(screenshot))
         return screenshot
 
-    # def _get_system_message(
-    #     self, screenshot: ImageObj | Image.Image
-    # ) -> Tuple[List[SystemMessage], Image.Image]:
-    #     system_prompt_info = get_computer_use_system_prompt(
-    #         screenshot,
-    #         self.MLM_PROCESSOR_IM_CFG,
-    #         include_input_text_key_args=self.include_input_text_key_args,
-    #         fn_call_template=self.fn_call_template,
-    #     )
-    #     self._mlm_width, self._mlm_height = system_prompt_info["im_size"]
-    #     scaled_screenshot = screenshot.resize((self._mlm_width, self._mlm_height))
-
-    #     system_message = []
-    #     for msg in system_prompt_info["conversation"]:
-    #         tmp_content = ""
-    #         for content in msg["content"]:
-    #             tmp_content += content["text"]
-
-    #         system_message.append(SystemMessage(content=tmp_content))
-
-    #     return system_message, scaled_screenshot
-
     async def run(self, user_message: str) -> Tuple:
         """Run the agent with a user message."""
         # Initialize if not already done
@@ -502,16 +464,9 @@ If DOM-based actions (refs) aren't working, fall back to screenshot + coordinate
         prior_tool_result: dict | None = None,
         prior_tool_output: dict | None = None,
     ) -> Tuple[List[FunctionCall], str]:
-        # screenshot_for_system = first_screenshot
         if not is_first_round:
             # Get screenshot and add new user message for subsequent rounds
             screenshot = await self._get_screenshot()
-            # screenshot_for_system = screenshot
-
-            # text_prompt = self.USER_MESSAGE
-            # curr_url = await self._playwright_controller.get_page_url(self._page)
-            # trimmed_url = get_trimmed_url(curr_url, max_len=self.max_url_chars)
-            # text_prompt = f"Current URL: {trimmed_url}\n" + text_prompt
 
             curr_message = UserMessage(
                 content=[
@@ -533,16 +488,9 @@ If DOM-based actions (refs) aren't working, fall back to screenshot + coordinate
                 ]
             )
 
-            # curr_message = UserMessage(
-            #     content=[ImageObj.from_pil(screenshot), text_prompt]
-            # )
             self._chat_history.append(curr_message)
 
         # Generate system message using the screenshot
-
-        # Don't add the FARA system prompt for anthropic
-        # system_message, _ = self._get_system_message(screenshot_for_system)
-        # history = system_message + history
         response = await self._make_model_call(
             self._chat_history, extra_create_args={"temperature": 0}
         )
