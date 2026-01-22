@@ -432,7 +432,9 @@ class PlaywrightController:
         await asyncio.sleep(1.0)
 
     @handle_target_closed()
-    async def click_coords(self, page: Page, x: float, y: float) -> None:
+    async def click_coords(
+        self, page: Page, x: float, y: float, button: str = "left", count: int = 1
+    ) -> None:
         new_page: Page | None = None
         await self._ensure_page_ready(page)
 
@@ -445,7 +447,9 @@ class PlaywrightController:
             try:
                 # Give it a chance to open a new page
                 async with page.expect_event("popup", timeout=1000) as page_info:  # type: ignore
-                    await page.mouse.click(x, y, delay=10)
+                    await page.mouse.click(
+                        x, y, delay=10, button=button, click_count=count
+                    )
                     new_page = await page_info.value  # type: ignore
                     assert isinstance(new_page, Page)
                     await self.on_new_page(new_page)
@@ -455,7 +459,9 @@ class PlaywrightController:
             try:
                 # Give it a chance to open a new page
                 async with page.expect_event("popup", timeout=1000) as page_info:  # type: ignore
-                    await page.mouse.click(x, y, delay=10)
+                    await page.mouse.click(
+                        x, y, delay=10, button=button, click_count=count
+                    )
                     new_page = await page_info.value  # type: ignore
                     assert isinstance(new_page, Page)
                     await self.on_new_page(new_page)
@@ -482,6 +488,18 @@ class PlaywrightController:
             await asyncio.sleep(0.1)
 
         await page.mouse.move(x, y)
+
+    async def type_text(self, page: Page, value: str) -> None:
+        """
+        Types text into the page at the current cursor position.
+
+        Args:
+            page (Page): The Playwright page object.
+            value (str): The text to type.
+        """
+        await self._ensure_page_ready(page)
+
+        await page.keyboard.type(value)
 
     @handle_target_closed()
     async def fill_coords(

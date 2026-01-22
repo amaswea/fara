@@ -74,6 +74,7 @@ async def run_claude_agent(
     )
 
     try:
+        print("Initializing Claude agent...")
         await agent.initialize()
 
         # Interactive loop

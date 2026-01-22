@@ -534,12 +534,31 @@ class FaraAgent:
                 "I am waiting a short period of time before taking further action."
             )
             await self._playwright_controller.sleep(self._page, duration)
-        elif args["action"] == "click" or args["action"] == "left_click":
+        elif (
+            args["action"] == "click"
+            or args["action"] == "left_click"
+            or args["action"] == "double_click"
+            or args["action"] == "triple_click"
+            or args["action"] == "right_click"
+            or args["action"] == "middle_click"
+        ):
             if "coordinate" in args:
+                button = "left"
                 tgt_x, tgt_y = args["coordinate"]
                 action_description = f"I clicked at coordinates ({tgt_x}, {tgt_y})."
+                click_count = 1
+                if args["action"] == "double_click":
+                    click_count = 2
+                elif args["action"] == "triple_click":
+                    click_count = 3
+                elif args["action"] == "right_click":
+                    click_count = 1
+                    button = "right"
+                elif args["action"] == "middle_click":
+                    click_count = 1
+                    button = "middle"
                 new_page_tentative = await self._playwright_controller.click_coords(
-                    self._page, tgt_x, tgt_y
+                    self._page, tgt_x, tgt_y, button=button, count=click_count
                 )
 
             if new_page_tentative is not None:

@@ -32,6 +32,13 @@ from anthropic import Anthropic
 from .utils import get_trimmed_url
 
 
+# TODO
+# - Image filtering, use only 3 recent images
+# - Add page text / dom
+# - Ensure history / messages format
+# - Implement more actions
+
+
 class ClaudeAgent:
     DEFAULT_START_PAGE = "https://www.bing.com/"
 
@@ -224,8 +231,6 @@ If DOM-based actions (refs) aren't working, fall back to screenshot + coordinate
 
         # Initialize Anthropic client
         self._anthropic_client = Anthropic(api_key=self.client_config.get("api_key"))
-        print("Anthropic client initialized.")
-        print(self._anthropic_client.api_key)
 
         # Set up download handler
         self.browser_manager.set_download_handler(self._download_handler)
@@ -284,14 +289,13 @@ If DOM-based actions (refs) aren't working, fall back to screenshot + coordinate
         self,
         history: List[LLMMessage],
         extra_create_args: Dict[str, Any] | None = None,
-    ) -> ModelResponse:
+    ) -> Dict[str, Any]:
         """Make a model call using OpenAI client"""
 
-        openai_messages = [message_to_anthropic_format(msg) for msg in history]
-        # request_params = {
-        #     "model": self.client_config.get("model", "gpt-4o"),
-        #     "messages": openai_messages,
-        # }
+        messages = [message_to_anthropic_format(msg) for msg in history]
+
+        with open("claude_debug_messages.json", "w") as f:
+            json.dump(messages, f, indent=2)
 
         tools = {
             "name": "browser",
@@ -299,141 +303,126 @@ If DOM-based actions (refs) aren't working, fall back to screenshot + coordinate
             "input_schema": self.BROWSER_TOOL_INPUT_SCHEMA,
         }
 
-        # print("Making model call with messages:")
-        # for msg in openai_messages:
-        #     print(msg)
-
         print(
             "Using model:",
             self.client_config.get("model", "claude-sonnet-4-5-20250929"),
         )
 
-        # test_message = {"role": "user", "content": "What is 2 + 2?"}
         api_kwargs = {
             "max_tokens": self.MAX_TOKENS,
-            "messages": [openai_messages],
+            "messages": messages,
             "model": self.client_config.get("model", "claude-sonnet-4-5-20250929"),
-            "system": [self.SYSTEM_PROMPT],
+            "system": self.SYSTEM_PROMPT,
             "tools": [tools],
             "temperature": 1.0,
         }
 
         # Use regular messages API when no beta features are needed
         try:
-            print("Making model call with kwargs:", api_kwargs)
             response = self._anthropic_client.messages.create(**api_kwargs)
         except Exception as e:
             print("Error during model call:", e)
             self.logger.error(f"Error during model call: {e}", exc_info=True)
             raise e
 
-        content = response.content
-        usage = {}
-        # if response.usage:
-        #     usage = {
-        #         "prompt_tokens": response.usage.prompt_tokens,
-        #         "completion_tokens": response.usage.completion_tokens,
-        #         "total_tokens": response.usage.total_tokens,
-        #     }
-        return ModelResponse(content=content, usage=usage)
+        return response
 
-    def remove_screenshot_from_message(self, msg: List[Dict[str, Any]] | Any) -> Any:
-        """Remove the screenshot from the message content."""
-        if isinstance(msg.content, list):
-            new_content = []
-            for c in msg.content:
-                if not isinstance(c, ImageObj):
-                    new_content.append(c)
-            msg.content = new_content
-        elif isinstance(msg.content, ImageObj):
-            msg = None
-        return msg
+    # def remove_screenshot_from_message(self, msg: List[Dict[str, Any]] | Any) -> Any:
+    #     """Remove the screenshot from the message content."""
+    #     if isinstance(msg.content, list):
+    #         new_content = []
+    #         for c in msg.content:
+    #             if not isinstance(c, ImageObj):
+    #                 new_content.append(c)
+    #         msg.content = new_content
+    #     elif isinstance(msg.content, ImageObj):
+    #         msg = None
+    #     return msg
 
-    def maybe_remove_old_screenshots(
-        self, history: List[LLMMessage], includes_current: bool = False
-    ) -> List[LLMMessage]:
-        """Remove old screenshots from the chat history. Assuming we have not yet added the current screenshot message.
+    # def maybe_remove_old_screenshots(
+    #     self, history: List[LLMMessage], includes_current: bool = False
+    # ) -> List[LLMMessage]:
+    #     """Remove old screenshots from the chat history. Assuming we have not yet added the current screenshot message.
 
-        Note: Original user messages (marked with is_original=True) have their TEXT preserved,
-        but their images may be removed if we exceed max_n_images. Boilerplate messages can be
-        completely removed.
-        """
-        if self.max_n_images <= 0:
-            return history
+    #     Note: Original user messages (marked with is_original=True) have their TEXT preserved,
+    #     but their images may be removed if we exceed max_n_images. Boilerplate messages can be
+    #     completely removed.
+    #     """
+    #     if self.max_n_images <= 0:
+    #         return history
 
-        max_n_images = self.max_n_images if includes_current else self.max_n_images - 1
-        new_history: List[LLMMessage] = []
-        n_images = 0
-        for i in range(len(history) - 1, -1, -1):
-            msg = history[i]
+    #     max_n_images = self.max_n_images if includes_current else self.max_n_images - 1
+    #     new_history: List[LLMMessage] = []
+    #     n_images = 0
+    #     for i in range(len(history) - 1, -1, -1):
+    #         msg = history[i]
 
-            is_original_user_message = isinstance(msg, UserMessage) and getattr(
-                msg, "is_original", False
-            )
+    #         is_original_user_message = isinstance(msg, UserMessage) and getattr(
+    #             msg, "is_original", False
+    #         )
 
-            if i == 0 and n_images >= max_n_images:
-                # First message is always the task so we keep it and remove the screenshot if necessary
-                msg = self.remove_screenshot_from_message(msg)
-                if msg is None:
-                    continue
+    #         if i == 0 and n_images >= max_n_images:
+    #             # First message is always the task so we keep it and remove the screenshot if necessary
+    #             msg = self.remove_screenshot_from_message(msg)
+    #             if msg is None:
+    #                 continue
 
-            if isinstance(msg.content, list):
-                # Check if the message contains an image. Assumes 1 image per message.
-                has_image = False
-                for c in msg.content:
-                    if isinstance(c, ImageObj):
-                        has_image = True
-                        break
-                if has_image:
-                    if n_images < max_n_images:
-                        new_history.append(msg)
-                    elif is_original_user_message:
-                        # Original user message but over limit: keep text, remove image
-                        msg = self.remove_screenshot_from_message(msg)
-                        if msg is not None:
-                            new_history.append(msg)
-                    n_images += 1
-                else:
-                    new_history.append(msg)
-            elif isinstance(msg.content, ImageObj):
-                if n_images < max_n_images:
-                    new_history.append(msg)
-                n_images += 1
-            else:
-                new_history.append(msg)
+    #         if isinstance(msg.content, list):
+    #             # Check if the message contains an image. Assumes 1 image per message.
+    #             has_image = False
+    #             for c in msg.content:
+    #                 if isinstance(c, ImageObj):
+    #                     has_image = True
+    #                     break
+    #             if has_image:
+    #                 if n_images < max_n_images:
+    #                     new_history.append(msg)
+    #                 elif is_original_user_message:
+    #                     # Original user message but over limit: keep text, remove image
+    #                     msg = self.remove_screenshot_from_message(msg)
+    #                     if msg is not None:
+    #                         new_history.append(msg)
+    #                 n_images += 1
+    #             else:
+    #                 new_history.append(msg)
+    #         elif isinstance(msg.content, ImageObj):
+    #             if n_images < max_n_images:
+    #                 new_history.append(msg)
+    #             n_images += 1
+    #         else:
+    #             new_history.append(msg)
 
-        new_history = new_history[::-1]
+    #     new_history = new_history[::-1]
 
-        return new_history
+    #     return new_history
 
-    async def _get_scaled_screenshot(self) -> Image.Image:
+    async def _get_screenshot(self) -> Image.Image:
         """Get current screenshot and scale it for the model."""
         screenshot = await self._playwright_controller.get_screenshot(self._page)
         screenshot = Image.open(io.BytesIO(screenshot))
-        _, scaled_screenshot = self._get_system_message(screenshot)
-        return scaled_screenshot
+        return screenshot
 
-    def _get_system_message(
-        self, screenshot: ImageObj | Image.Image
-    ) -> Tuple[List[SystemMessage], Image.Image]:
-        system_prompt_info = get_computer_use_system_prompt(
-            screenshot,
-            self.MLM_PROCESSOR_IM_CFG,
-            include_input_text_key_args=self.include_input_text_key_args,
-            fn_call_template=self.fn_call_template,
-        )
-        self._mlm_width, self._mlm_height = system_prompt_info["im_size"]
-        scaled_screenshot = screenshot.resize((self._mlm_width, self._mlm_height))
+    # def _get_system_message(
+    #     self, screenshot: ImageObj | Image.Image
+    # ) -> Tuple[List[SystemMessage], Image.Image]:
+    #     system_prompt_info = get_computer_use_system_prompt(
+    #         screenshot,
+    #         self.MLM_PROCESSOR_IM_CFG,
+    #         include_input_text_key_args=self.include_input_text_key_args,
+    #         fn_call_template=self.fn_call_template,
+    #     )
+    #     self._mlm_width, self._mlm_height = system_prompt_info["im_size"]
+    #     scaled_screenshot = screenshot.resize((self._mlm_width, self._mlm_height))
 
-        system_message = []
-        for msg in system_prompt_info["conversation"]:
-            tmp_content = ""
-            for content in msg["content"]:
-                tmp_content += content["text"]
+    #     system_message = []
+    #     for msg in system_prompt_info["conversation"]:
+    #         tmp_content = ""
+    #         for content in msg["content"]:
+    #             tmp_content += content["text"]
 
-            system_message.append(SystemMessage(content=tmp_content))
+    #         system_message.append(SystemMessage(content=tmp_content))
 
-        return system_message, scaled_screenshot
+    #     return system_message, scaled_screenshot
 
     def _parse_thoughts_and_action(self, message: str) -> Tuple[str, Dict[str, Any]]:
         try:
@@ -453,34 +442,6 @@ If DOM-based actions (refs) aren't working, fall back to screenshot + coordinate
             )
             raise e
 
-    def convert_resized_coords_to_original(
-        self, coords: List[float], rsz_w: int, rsz_h: int, og_w: int, og_h: int
-    ) -> List[float]:
-        scale_x = og_w / rsz_w
-        scale_y = og_h / rsz_h
-        return [coords[0] * scale_x, coords[1] * scale_y]
-
-    def proc_coords(
-        self,
-        coords: List[float] | None,
-        im_w: int,
-        im_h: int,
-        og_im_w: int | None = None,
-        og_im_h: int | None = None,
-    ) -> List[float] | None:
-        if not coords:
-            return coords
-
-        if og_im_w is None:
-            og_im_w = im_w
-        if og_im_h is None:
-            og_im_h = im_h
-
-        tgt_x, tgt_y = coords
-        return self.convert_resized_coords_to_original(
-            [tgt_x, tgt_y], im_w, im_h, og_im_w, og_im_h
-        )
-
     async def run(self, user_message: str) -> Tuple:
         """Run the agent with a user message."""
         # Initialize if not already done
@@ -490,7 +451,7 @@ If DOM-based actions (refs) aren't working, fall back to screenshot + coordinate
         assert self._page is not None, "Page should be initialized"
 
         # Get initial screenshot and add user message with image to chat history
-        scaled_screenshot = await self._get_scaled_screenshot()
+        screenshot = await self._get_screenshot()
 
         if self.save_screenshots:
             await self._playwright_controller.get_screenshot(
@@ -500,9 +461,10 @@ If DOM-based actions (refs) aren't working, fall back to screenshot + coordinate
                 ),
             )
 
+        # Initial user message does not have screenshot for claude.
         self._chat_history.append(
             UserMessage(
-                content=[ImageObj.from_pil(scaled_screenshot), user_message],
+                content=[user_message],
                 is_original=True,
             )
         )
@@ -510,7 +472,6 @@ If DOM-based actions (refs) aren't working, fall back to screenshot + coordinate
         all_actions = []
         all_observations = []
         final_answer = "<no_answer>"
-        is_stop_action = False
         for i in range(self.max_rounds):
             is_first_round = i == 0
             if not self.browser_manager._captcha_event.is_set():
@@ -524,55 +485,44 @@ If DOM-based actions (refs) aren't working, fall back to screenshot + coordinate
                         "Captcha timed out, unable to proceed with web surfing."
                     )
 
-            tool_use, raw_response = await self.generate_model_call(
-                is_first_round, scaled_screenshot if is_first_round else None
+            tool_use, text_response = await self.generate_model_call(
+                is_first_round, screenshot if is_first_round else None
             )
-            assert isinstance(raw_response, str)
-            all_actions.append(raw_response)
 
-            # thoughts, action_dict = self._parse_thoughts_and_action(raw_response)
-            # action_args = action_dict.get("arguments", {})
-            # action = action_args["action"]
-            # self.logger.debug(
-            #     f"\nThought #{i+1}: {thoughts}\nAction #{i+1}: executing tool '{action}' with arguments {json.dumps(action_args)}"
-            # )
-            # print(
-            #     f"\nThought #{i+1}: {thoughts}\nAction #{i+1}: executing tool '{action}' with arguments {json.dumps(action_args)}"
-            # )
-            function_calls = [
-                FunctionCall(id="dummy", name=tool_use.name, arguments=tool_use.input)
-            ]
-            (
-                is_stop_action,
-                new_screenshot,
-                action_description,
-            ) = await self.execute_action(function_calls)
+            if text_response is not None:
+                all_actions.append(text_response)
 
-            all_observations.append(action_description)
-            self.logger.debug(f"Observation#{i+1}: {action_description}")
-            print(f"Observation#{i+1}: {action_description}")
-            if is_stop_action:
-                final_answer = next(
-                    (
-                        block.text
-                        for block in raw_response.content
-                        if isinstance(block, TextBlock)
-                    ),
-                    None,
-                )
+            if tool_use is not None:
+                function_calls = [
+                    FunctionCall(
+                        id="dummy", name=tool_use.name, arguments=tool_use.input
+                    )
+                ]
+                (
+                    _,
+                    _,
+                    action_description,
+                ) = await self.execute_action(function_calls)
+
+                all_observations.append(action_description)
+                self.logger.debug(f"Observation#{i+1}: {action_description}")
+                print(f"Observation#{i+1}: {action_description}")
+
+            if tool_use is None:
+                final_answer = text_response
                 break
         return final_answer, all_actions, all_observations
 
     async def generate_model_call(
         self, is_first_round: bool, first_screenshot: Image.Image | None = None
     ) -> Tuple[List[FunctionCall], str]:
-        history = self.maybe_remove_old_screenshots(self._chat_history)
+        history = self._chat_history
 
         # screenshot_for_system = first_screenshot
         if not is_first_round:
             # Get screenshot and add new user message for subsequent rounds
-            scaled_screenshot = await self._get_scaled_screenshot()
-            # screenshot_for_system = scaled_screenshot
+            screenshot = await self._get_screenshot()
+            # screenshot_for_system = screenshot
 
             text_prompt = self.USER_MESSAGE
             curr_url = await self._playwright_controller.get_page_url(self._page)
@@ -580,7 +530,7 @@ If DOM-based actions (refs) aren't working, fall back to screenshot + coordinate
             text_prompt = f"Current URL: {trimmed_url}\n" + text_prompt
 
             curr_message = UserMessage(
-                content=[ImageObj.from_pil(scaled_screenshot), text_prompt]
+                content=[ImageObj.from_pil(screenshot), text_prompt]
             )
             self._chat_history.append(curr_message)
             history.append(curr_message)
@@ -593,19 +543,34 @@ If DOM-based actions (refs) aren't working, fall back to screenshot + coordinate
         response = await self._make_model_call(
             history, extra_create_args={"temperature": 0}
         )
-        message = response.content
-        print("Model response:", message)
+        print("Model response:", response)
 
-        self._chat_history.append(AssistantMessage(content=message))
-        # thoughts, action = self._parse_thoughts_and_action(message)
-        # action["arguments"]["thoughts"] = thoughts
+        # Append assistant message to chat history
+        text_response = next(
+            (block.text for block in response.content if isinstance(block, TextBlock)),
+            None,
+        )
+
         tool_use = None
         if response.stop_reason == "tool_use":
             tool_use = next(
                 block for block in response.content if block.type == "tool_use"
             )
 
-        return tool_use, message
+        # Build the assistant message content
+        assistant_content = []
+        if text_response is not None:
+            assistant_content.append({"type": "text", "text": text_response})
+        if tool_use is not None:
+            assistant_content.append(
+                {"type": tool_use.type, "name": tool_use.name, "input": tool_use.input}
+            )
+        self._chat_history.append(AssistantMessage(content=assistant_content))
+
+        print("Tool use:", tool_use)
+        print("Text response:", text_response)
+
+        return tool_use, text_response
 
     async def execute_action(
         self,
@@ -624,22 +589,14 @@ If DOM-based actions (refs) aren't working, fall back to screenshot + coordinate
                 message=f"{name}( {json.dumps(args)} )",
             )
         )
-        # if "coordinate" in args:
-        #     args["coordinate"] = self.proc_coords(
-        #         args["coordinate"],
-        #         self._mlm_width,
-        #         self._mlm_height,
-        #         self.viewport_width,
-        #         self.viewport_height,
-        #     )
 
         is_stop_action = False
 
         if args["action"] == "navigate":
-            if "url" not in args:
-                raise ValueError("navigate action requires 'url' argument")
+            if "text" not in args:
+                raise ValueError("navigate action requires 'text' argument")
 
-            url = str(args["url"])
+            url = str(args["text"])
             action_description = f"Navigated to {url}"
             # Check if the argument starts with a known protocol
             if url.startswith(("https://", "http://", "file://", "about:")):
@@ -713,17 +670,32 @@ If DOM-based actions (refs) aren't working, fall back to screenshot + coordinate
             duration = args.get("time", duration)
             action_description = f"Waited for {duration} seconds."
             await self._playwright_controller.sleep(self._page, duration)
-        elif args["action"] == "left_click":
+        elif (
+            args["action"] == "click"
+            or args["action"] == "left_click"
+            or args["action"] == "double_click"
+            or args["action"] == "triple_click"
+            or args["action"] == "right_click"
+            or args["action"] == "middle_click"
+        ):
             if "coordinate" in args:
+                button = "left"
                 tgt_x, tgt_y = args["coordinate"]
-                action_description = f"Clicked at ({tgt_x}, {tgt_y})"
-                new_page_tentative = await self._playwright_controller.click_coords(
-                    self._page, tgt_x, tgt_y
+                action_description = f"I clicked at coordinates ({tgt_x}, {tgt_y})."
+                click_count = 1
+                if args["action"] == "double_click":
+                    click_count = 2
+                elif args["action"] == "triple_click":
+                    click_count = 3
+                elif args["action"] == "right_click":
+                    click_count = 1
+                    button = "right"
+                elif args["action"] == "middle_click":
+                    click_count = 1
+                    button = "middle"
+                _ = await self._playwright_controller.click_coords(
+                    self._page, tgt_x, tgt_y, button=button, count=click_count
                 )
-
-            if new_page_tentative is not None:
-                self._page = new_page_tentative
-                self._prior_metadata_hash = None
 
         elif args["action"] == "type":
             text_value = str(args.get("text", args.get("text_value")))
