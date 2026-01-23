@@ -1,5 +1,7 @@
 from datetime import datetime
+import sys
 from typing import Any
+from pathlib import Path
 from unittest import result
 from playwright.async_api import Page
 import logging
@@ -25,6 +27,7 @@ from .fara_types import (
     WebSurferEvent,
 )
 from anthropic import Anthropic
+from .claude_utils.coordinate_scaler import CoordinateScaler
 
 
 # TODO
@@ -71,7 +74,7 @@ If DOM-based actions (refs) aren't working, fall back to screenshot + coordinate
     BROWSER_TOOL_INPUT_SCHEMA: dict[str, Any] = {
         "properties": {
             "action": {
-                "description": 'The action to perform. The available actions are:\n* `navigate`: Navigate to a URL or use "back"/"forward" for browser history navigation. Automatically includes a screenshot of the loaded page.\n* `screenshot`: Take a screenshot of the current browser viewport.\n* `left_click`: Click the left mouse button at the specified coordinate or element reference.\n* `right_click`: Click the right mouse button at the specified coordinate or element reference.\n* `middle_click`: Click the middle mouse button at the specified coordinate or element reference.\n* `double_click`: Double-click the left mouse button at the specified coordinate or element reference.\n* `triple_click`: Triple-click the left mouse button at the specified coordinate or element reference.\n* `hover`: Move the mouse cursor to the specified coordinate or element reference without clicking. Useful for revealing tooltips, dropdown menus, or triggering hover states.\n* `left_click_drag`: Click and drag from start_coordinate to coordinate.\n* `left_mouse_down`: Press and hold the left mouse button at the specified coordinate.\n* `left_mouse_up`: Release the left mouse button at the specified coordinate.\n* `scroll`: Scroll the page in a specified direction.\n* `scroll_to`: Scroll to bring an element into view.\n* `type`: Type text at the current cursor position.\n* `key`: Press a key or key combination (supports standard keys and modifiers).\n* `hold_key`: Hold down a key or key combination for a specified duration.\n* `read_page`: Get the DOM tree structure, optionally filtered for interactive elements.\n* `find`: Find text on the page and highlight matches.\n* `get_page_text`: Get all text content from the page.\n* `wait`: Wait for a specified duration in seconds.\n* `form_input`: Set the value of a form input element.\n* `zoom`: Take a zoomed screenshot of a specific region.\n* `execute_js`: Execute JavaScript code in the page context. Returns the result of the last expression.\n* `refresh`: Refresh the current page to ensure the information is up to date.',
+                "description": 'The action to perform. The available actions are:\n* `navigate`: Navigate to a URL or use "back"/"forward" for browser history navigation. Automatically includes a screenshot of the loaded page.\n* `screenshot`: Take a screenshot of the current browser viewport.\n* `left_click`: Click the left mouse button at the specified coordinate or element reference.\n* `right_click`: Click the right mouse button at the specified coordinate or element reference.\n* `middle_click`: Click the middle mouse button at the specified coordinate or element reference.\n* `double_click`: Double-click the left mouse button at the specified coordinate or element reference.\n* `triple_click`: Triple-click the left mouse button at the specified coordinate or element reference.\n* `hover`: Move the mouse cursor to the specified coordinate or element reference without clicking. Useful for revealing tooltips, dropdown menus, or triggering hover states.\n* `left_click_drag`: Click and drag from start_coordinate to coordinate.\n* `left_mouse_down`: Press and hold the left mouse button at the specified coordinate.\n* `left_mouse_up`: Release the left mouse button at the specified coordinate.\n* `scroll`: Scroll the page in a specified direction.\n* `scroll_to`: Scroll to bring an element into view.\n* `type`: Type text at the current cursor position.\n* `key`: Press a key or key combination (supports standard keys and modifiers).\n* `hold_key`: Hold down a key or key combination for a specified duration.\n* `read_page`: Get the DOM tree structure, optionally filtered for interactive elements.\n* `find`: Find text on the page and highlight matches.\n* `get_page_text`: Get all text content from the page.\n* `wait`: Wait for a specified duration in seconds.\n* `form_input`: Set the value of a form input element.\n* `zoom`: Take a zoomed screenshot of a specific region.\n* `execute_js`: Execute JavaScript code in the page context. Returns the result of the last expression.\n* `refresh`: Refresh the current page to ensure the information is up to date.',  # left_mouse_down, left_mouse_up, scroll_to, hold_key, find, form_input, zoom
                 "enum": [
                     "navigate",
                     "screenshot",
@@ -309,74 +312,74 @@ If DOM-based actions (refs) aren't working, fall back to screenshot + coordinate
 
         return response
 
-    # def remove_screenshot_from_message(self, msg: List[Dict[str, Any]] | Any) -> Any:
-    #     """Remove the screenshot from the message content."""
-    #     if isinstance(msg.content, list):
-    #         new_content = []
-    #         for c in msg.content:
-    #             if not isinstance(c, ImageObj):
-    #                 new_content.append(c)
-    #         msg.content = new_content
-    #     elif isinstance(msg.content, ImageObj):
-    #         msg = None
-    #     return msg
+    def remove_screenshot_from_message(self, msg: List[Dict[str, Any]] | Any) -> Any:
+        """Remove the screenshot from the message content."""
+        if isinstance(msg.content, list):
+            new_content = []
+            for c in msg.content:
+                if not isinstance(c, ImageObj):
+                    new_content.append(c)
+            msg.content = new_content
+        elif isinstance(msg.content, ImageObj):
+            msg = None
+        return msg
 
-    # def maybe_remove_old_screenshots(
-    #     self, history: List[LLMMessage], includes_current: bool = False
-    # ) -> List[LLMMessage]:
-    #     """Remove old screenshots from the chat history. Assuming we have not yet added the current screenshot message.
+    def maybe_remove_old_screenshots(
+        self, history: List[LLMMessage], includes_current: bool = False
+    ):
+        """Remove old screenshots from the chat history. Assuming we have not yet added the current screenshot message.
 
-    #     Note: Original user messages (marked with is_original=True) have their TEXT preserved,
-    #     but their images may be removed if we exceed max_n_images. Boilerplate messages can be
-    #     completely removed.
-    #     """
-    #     if self.max_n_images <= 0:
-    #         return history
+        Note: Original user messages (marked with is_original=True) have their TEXT preserved,
+        but their images may be removed if we exceed max_n_images. Boilerplate messages can be
+        completely removed.
+        """
+        if self.max_n_images <= 0:
+            return history
 
-    #     max_n_images = self.max_n_images if includes_current else self.max_n_images - 1
-    #     new_history: List[LLMMessage] = []
-    #     n_images = 0
-    #     for i in range(len(history) - 1, -1, -1):
-    #         msg = history[i]
+        max_n_images = self.max_n_images if includes_current else self.max_n_images - 1
+        new_history: List[LLMMessage] = []
+        n_images = 0
+        for i in range(len(history) - 1, -1, -1):
+            msg = history[i]
 
-    #         is_original_user_message = isinstance(msg, UserMessage) and getattr(
-    #             msg, "is_original", False
-    #         )
+            is_original_user_message = isinstance(msg, UserMessage) and getattr(
+                msg, "is_original", False
+            )
 
-    #         if i == 0 and n_images >= max_n_images:
-    #             # First message is always the task so we keep it and remove the screenshot if necessary
-    #             msg = self.remove_screenshot_from_message(msg)
-    #             if msg is None:
-    #                 continue
+            if i == 0 and n_images >= max_n_images:
+                # First message is always the task so we keep it and remove the screenshot if necessary
+                msg = self.remove_screenshot_from_message(msg)
+                if msg is None:
+                    continue
 
-    #         if isinstance(msg.content, list):
-    #             # Check if the message contains an image. Assumes 1 image per message.
-    #             has_image = False
-    #             for c in msg.content:
-    #                 if isinstance(c, ImageObj):
-    #                     has_image = True
-    #                     break
-    #             if has_image:
-    #                 if n_images < max_n_images:
-    #                     new_history.append(msg)
-    #                 elif is_original_user_message:
-    #                     # Original user message but over limit: keep text, remove image
-    #                     msg = self.remove_screenshot_from_message(msg)
-    #                     if msg is not None:
-    #                         new_history.append(msg)
-    #                 n_images += 1
-    #             else:
-    #                 new_history.append(msg)
-    #         elif isinstance(msg.content, ImageObj):
-    #             if n_images < max_n_images:
-    #                 new_history.append(msg)
-    #             n_images += 1
-    #         else:
-    #             new_history.append(msg)
+            if isinstance(msg.content, list):
+                # Check if the message contains an image. Assumes 1 image per message.
+                has_image = False
+                for c in msg.content:
+                    if isinstance(c, ImageObj):
+                        has_image = True
+                        break
+                if has_image:
+                    if n_images < max_n_images:
+                        new_history.append(msg)
+                    elif is_original_user_message:
+                        # Original user message but over limit: keep text, remove image
+                        msg = self.remove_screenshot_from_message(msg)
+                        if msg is not None:
+                            new_history.append(msg)
+                    n_images += 1
+                else:
+                    new_history.append(msg)
+            elif isinstance(msg.content, ImageObj):
+                if n_images < max_n_images:
+                    new_history.append(msg)
+                n_images += 1
+            else:
+                new_history.append(msg)
 
-    #     new_history = new_history[::-1]
+        new_history = new_history[::-1]
 
-    #     return new_history
+        return new_history
 
     async def _get_screenshot(self) -> Image.Image:
         """Get current screenshot and scale it for the model."""
@@ -469,6 +472,8 @@ If DOM-based actions (refs) aren't working, fall back to screenshot + coordinate
         prior_tool_result: dict | None = None,
         prior_tool_output: dict | None = None,
     ) -> Tuple[List[FunctionCall], str]:
+        # Remove old screenshots from history if needed, since we only want to keep the most recent ones (as configured by max_n_images)
+        self.maybe_remove_old_screenshots(self._chat_history)
         if not is_first_round:
             # Get screenshot and add new user message for subsequent rounds
             screenshot = await self._get_screenshot()
@@ -533,6 +538,83 @@ If DOM-based actions (refs) aren't working, fall back to screenshot + coordinate
 
         return tool_use, text_response
 
+    def _scale_coordinates(self, x: int, y: int) -> tuple[int, int]:
+        """
+        Apply auto-scaling to coordinates using the CoordinateScaler.
+
+        Claude's vision model interprets images at a different resolution than actual.
+        We use empirically-derived base resolution for accurate coordinate mapping.
+
+        Args:
+            x: Original x coordinate
+            y: Original y coordinate
+
+        Returns:
+            Tuple of (scaled_x, scaled_y)
+        """
+        # Get scale factors for this viewport
+        scale_x, scale_y = CoordinateScaler.get_scale_factors(
+            self._playwright_controller.viewport_width,  # Probably shouldn't be accessing these directly but ok for now
+            self._playwright_controller.viewport_height,
+        )
+
+        # Only log scale factors if they're being initialized
+        if not hasattr(self, "_logged_scale_factors"):
+            print(
+                f"[Auto-Scale] Using scale factors: {scale_x:.3f}x, {scale_y:.3f}y",
+                file=sys.stderr,
+                flush=True,
+            )
+            self._logged_scale_factors = True
+
+        # Apply scaling using CoordinateScaler
+        scaled_x, scaled_y = CoordinateScaler.scale_coordinates(
+            x,
+            y,
+            self._playwright_controller.viewport_width,  # Probably shouldn't be accessing these directly but ok for now
+            self._playwright_controller.viewport_height,
+        )
+
+        # Log if scaling was actually applied
+        if scaled_x != x or scaled_y != y:
+            print(
+                f"[Auto-Scale] Scaled ({x}, {y}) -> ({scaled_x}, {scaled_y})",
+                file=sys.stderr,
+                flush=True,
+            )
+
+        return scaled_x, scaled_y
+
+    async def get_page_dom(self, page: Page, filter_type: str = "all") -> str:
+        """
+        Get the DOM structure of the page.
+
+        Args:
+            page (Page): The Playwright page object.
+
+        Returns:
+            str: The DOM structure of the page.
+        """
+        await self._playwright_controller._ensure_page_ready(page)
+
+        script_path = Path(__file__).parent / "claude_utils/browser_dom_script.js"
+        if not script_path.exists():
+            raise RuntimeError(f"Script file not found: {script_path}")
+
+        script = script_path.read_text()
+
+        # The DOM script defines window.__generateAccessibilityTree function
+        # We need to inject it and then call it
+        combined_expression = f"""
+            (function() {{
+                {script}
+                return window.__generateAccessibilityTree('{filter_type}');
+            }})()
+        """
+
+        dom_tree = await page.evaluate(combined_expression)
+        return dom_tree
+
     async def execute_action(
         self,
         function_call: List[FunctionCall],
@@ -586,23 +668,6 @@ If DOM-based actions (refs) aren't working, fall back to screenshot + coordinate
                 self._last_download = None
             if reset_prior_metadata and self._prior_metadata_hash is not None:
                 self._prior_metadata_hash = None
-        # elif args["action"] == "history_back":
-        #     action_description = "I clicked the browser back button."
-        #     await self._playwright_controller.back(self._page)
-        # elif args["action"] == "web_search":
-        #     query = args.get("query")
-        #     action_description = f"I typed '{query}' into the browser search bar."
-        #     encoded_query = quote_plus(query)
-        #     (
-        #         reset_prior_metadata,
-        #         reset_last_download,
-        #     ) = await self._playwright_controller.visit_page(
-        #         self._page, f"https://www.bing.com/search?q={encoded_query}&FORM=QBLH"
-        #     )
-        #     if reset_last_download and self._last_download is not None:
-        #         self._last_download = None
-        #     if reset_prior_metadata and self._prior_metadata_hash is not None:
-        #         self._prior_metadata_hash = None
         elif args["action"] == "scroll":
             scroll_direction = args.get("scroll_direction", "down")
 
@@ -616,12 +681,21 @@ If DOM-based actions (refs) aren't working, fall back to screenshot + coordinate
         # If other directions are needed, they can be implemented here
 
         elif args["action"] == "key":
-            keys = args.get("text", [])
-            action_description = f"Pressed key: {keys}"
-            await self._playwright_controller.keypress(self._page, keys)
+            keys = args.get("text", "")
+            action_description = f"Pressed keys: {keys}"
+            key_list = list(keys)
+            await self._playwright_controller.keypress(self._page, key_list)
+        elif args["action"] == "hold_key":
+            text = args.get("text", "")
+            duration = args.get("duration", 1.0)
+            key_list = list(text)
+            return await self._playwright_controller.keypress(
+                self._page, key_list, duration=duration
+            )
         elif args["action"] == "hover":
             if "coordinate" in args:
                 tgt_x, tgt_y = args["coordinate"]
+                tgt_x, tgt_y = self._scale_coordinates(tgt_x, tgt_y)
                 await self._playwright_controller.hover_coords(self._page, tgt_x, tgt_y)
 
             action_description = f"Hovered at ({tgt_x}, {tgt_y})"
@@ -642,6 +716,7 @@ If DOM-based actions (refs) aren't working, fall back to screenshot + coordinate
             if "coordinate" in args:
                 button = "left"
                 tgt_x, tgt_y = args["coordinate"]
+                tgt_x, tgt_y = self._scale_coordinates(tgt_x, tgt_y)
                 action_description = f"I clicked at coordinates ({tgt_x}, {tgt_y})."
                 click_count = 1
                 if args["action"] == "double_click":
@@ -654,38 +729,37 @@ If DOM-based actions (refs) aren't working, fall back to screenshot + coordinate
                 elif args["action"] == "middle_click":
                     click_count = 1
                     button = "middle"
+
                 _ = await self._playwright_controller.click_coords(
                     self._page, tgt_x, tgt_y, button=button, count=click_count
+                )
+        elif args["action"] == "left_mouse_down":
+            if "coordinate" in args:
+                tgt_x, tgt_y = args["coordinate"]
+                tgt_x, tgt_y = self._scale_coordinates(tgt_x, tgt_y)
+                action_description = (
+                    f"Pressed down left mouse button at ({tgt_x}, {tgt_y})."
+                )
+                await self._playwright_controller.mouse_down(
+                    self._page, tgt_x, tgt_y, button="left"
+                )
+        elif args["action"] == "left_click_drag":
+            if "start_coordinate" in args and "coordinate" in args:
+                start_x, start_y = args["start_coordinate"]
+                end_x, end_y = args["coordinate"]
+                start_x, start_y = self._scale_coordinates(start_x, start_y)
+                end_x, end_y = self._scale_coordinates(end_x, end_y)
+                action_description = (
+                    f"Dragged from ({start_x}, {start_y}) to ({end_x}, {end_y})."
+                )
+                await self._playwright_controller.drag_and_drop(
+                    self._page, start_x, start_y, end_x, end_y
                 )
 
         elif args["action"] == "type":
             text_value = str(args.get("text", args.get("text_value")))
             action_description = f"Typed: '{text_value}'"
             await self._playwright_controller.type_text(self._page, text_value)
-            # press_enter = args.get("press_enter", True)
-            # delete_existing_text = args.get("delete_existing_text", False)
-
-            # if "coordinate" in args:
-            #     tgt_x, tgt_y = args["coordinate"]
-            #     new_page_tentative = await self._playwright_controller.fill_coords(
-            #         self._page,
-            #         tgt_x,
-            #         tgt_y,
-            #         text_value,
-            #         press_enter=press_enter,
-            #         delete_existing_text=delete_existing_text,
-            #     )
-            #     if new_page_tentative is not None:
-            #         self._page = new_page_tentative
-            #         self._prior_metadata_hash = None
-
-        # elif args["action"] == "pause_and_memorize_fact":
-        #     fact = str(args.get("fact"))
-        #     self._facts.append(fact)
-        #     action_description = f"I memorized the following fact: {fact}"
-        # elif args["action"] == "stop" or args["action"] == "terminate":
-        #     action_description = args.get("thoughts")
-        #     is_stop_action = True
 
         elif args["action"] == "screenshot":
             action_description = "Took a screenshot of the current page."
@@ -701,7 +775,7 @@ If DOM-based actions (refs) aren't working, fall back to screenshot + coordinate
             action_description = "Refreshed the current page."
 
         elif args["action"] == "read_page":
-            dom_tree = await self._playwright_controller.get_page_dom(self._page)
+            dom_tree = await self.get_page_dom(self._page)
 
             # The script returns {pageContent: string}, extract just the pageContent
             if isinstance(dom_tree, dict) and "pageContent" in dom_tree:
@@ -774,3 +848,5 @@ If DOM-based actions (refs) aren't working, fall back to screenshot + coordinate
         if self._page is not None:
             self._page = None
         await self.browser_manager.close()
+
+        # screenshot, zoom, navigate, scroll, scroll_to, hover

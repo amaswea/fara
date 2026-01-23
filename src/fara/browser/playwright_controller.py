@@ -472,6 +472,42 @@ class PlaywrightController:
         return new_page
 
     @handle_target_closed()
+    async def mouse_down(
+        self, page: Page, x: float, y: float, button: str = "left"
+    ) -> None:
+        """
+        Presses down the mouse button at the specified coordinates.
+        """
+        await self._ensure_page_ready(page)
+
+        if self.animate_actions:
+            # Move cursor to the coordinates slowly
+            start_x, start_y = self.last_cursor_position
+            await self.gradual_cursor_animation(page, start_x, start_y, x, y)
+            await asyncio.sleep(0.1)
+
+        await page.mouse.move(x, y)
+        await page.mouse.down(button=button)
+
+    @handle_target_closed()
+    async def mouse_up(
+        self, page: Page, x: float, y: float, button: str = "left"
+    ) -> None:
+        """
+        Releases the mouse button at the specified coordinates.
+        """
+        await self._ensure_page_ready(page)
+
+        if self.animate_actions:
+            # Move cursor to the coordinates slowly
+            start_x, start_y = self.last_cursor_position
+            await self.gradual_cursor_animation(page, start_x, start_y, x, y)
+            await asyncio.sleep(0.1)
+
+        await page.mouse.move(x, y)
+        await page.mouse.up(button=button)
+
+    @handle_target_closed()
     async def hover_coords(self, page: Page, x: float, y: float) -> None:
         """
         Hovers the mouse over the specified coordinates.
@@ -526,35 +562,6 @@ class PlaywrightController:
         await self._ensure_page_ready(page)
         content = await page.evaluate("document.body.innerText")
         return content
-
-    async def get_page_dom(self, page: Page, filter_type: str = "all") -> str:
-        """
-        Get the DOM structure of the page.
-
-        Args:
-            page (Page): The Playwright page object.
-
-        Returns:
-            str: The DOM structure of the page.
-        """
-        await self._ensure_page_ready(page)
-
-        script_path = os.path.join(os.path.dirname(__file__), "browser_dom_script.js")
-        if not os.path.exists(script_path):
-            raise RuntimeError(f"Script file not found: {script_path}")
-
-        script = Path(script_path).read_text()
-
-        # The DOM script defines window.__generateAccessibilityTree function
-        # We need to inject it and then call it
-        combined_expression = f"""
-            (function() {{
-                {script}
-                return window.__generateAccessibilityTree('{filter_type}');
-            }})()
-        """
-        dom_tree = await page.evaluate(combined_expression)
-        return dom_tree
 
     async def execute_script(self, page: Page, script: str) -> Any:
         """
@@ -635,25 +642,61 @@ class PlaywrightController:
 
         return new_page
 
-    async def keypress(self, page: Page, keys: list[str]) -> None:
+    async def keypress(
+        self, page: Page, keys: list[str], duration: float = 1.0
+    ) -> None:
         """
         Press specified keys in sequence.
 
         Args:
             page (Page): The Playwright page object
             keys (List[str]): List of keys to press
+            duration (float): Duration to hold the keys down
         """
         await self._ensure_page_ready(page)
         mapped_keys = [CUA_KEY_TO_PLAYWRIGHT_KEY.get(key.lower(), key) for key in keys]
         try:
             for key in mapped_keys:
                 await page.keyboard.down(key)
+            await asyncio.sleep(duration)
             for key in reversed(mapped_keys):
                 await page.keyboard.up(key)
         except Exception as e:
             raise RuntimeError(
                 f"I tried to keypress(keys={keys}), but I got an error: {e}"
             ) from None
+
+    async def drag_and_drop(
+        self, page: Page, start_x: float, start_y: float, end_x: float, end_y: float
+    ) -> None:
+        """
+        Perform a drag-and-drop action from start coordinates to end coordinates.
+
+        Args:
+            page (Page): The Playwright page object.
+            start_x (float): The starting x coordinate.
+            start_y (float): The starting y coordinate.
+            end_x (float): The ending x coordinate.
+            end_y (float): The ending y coordinate.
+        """
+        await self._ensure_page_ready(page)
+
+        if self.animate_actions:
+            # Move cursor to the start coordinates slowly
+            curr_x, curr_y = self.last_cursor_position
+            await self.gradual_cursor_animation(page, curr_x, curr_y, start_x, start_y)
+            await asyncio.sleep(0.1)
+
+        await page.mouse.move(start_x, start_y)
+        await page.mouse.down()
+        if self.animate_actions:
+            # Drag cursor to the end coordinates slowly
+            await self.gradual_cursor_animation(page, start_x, start_y, end_x, end_y)
+            await asyncio.sleep(0.1)
+        else:
+            await page.mouse.move(end_x, end_y)
+        await page.mouse.up()
+        self.last_cursor_position = (end_x, end_y)
 
     @handle_target_closed()
     async def wait_for_load_state(
