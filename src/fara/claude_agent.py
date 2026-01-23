@@ -33,6 +33,7 @@ from anthropic import Anthropic
 # - Implement more actions (find, etc)
 # Some commands don't have screenshots,
 # other todos
+# and more todos
 
 
 class ClaudeAgent:
