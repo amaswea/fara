@@ -503,6 +503,16 @@ class PlaywrightController:
 
         await page.keyboard.type(value)
 
+    async def refresh_page(self, page: Page) -> None:
+        """
+        Refresh the current page.
+
+        Args:
+            page (Page): The Playwright page object.
+        """
+        await self._ensure_page_ready(page)
+        await page.reload()
+
     async def get_page_text(self, page: Page) -> str:
         """
         Get the visible text content of the page.

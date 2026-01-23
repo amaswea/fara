@@ -33,11 +33,12 @@ from anthropic import Anthropic
 # - Implement more actions (find, etc)
 # Some commands don't have screenshots,
 # other todos
-# and more todos
 
 
 class ClaudeAgent:
     DEFAULT_START_PAGE = "https://www.bing.com/"
+
+    MAX_TOKENS = 4096
 
     SYSTEM_PROMPT = f"""<SYSTEM_CAPABILITY>
 * You control a Chromium browser via Playwright automation.
@@ -70,7 +71,7 @@ If DOM-based actions (refs) aren't working, fall back to screenshot + coordinate
     BROWSER_TOOL_INPUT_SCHEMA: dict[str, Any] = {
         "properties": {
             "action": {
-                "description": 'The action to perform. The available actions are:\n* `navigate`: Navigate to a URL or use "back"/"forward" for browser history navigation. Automatically includes a screenshot of the loaded page.\n* `screenshot`: Take a screenshot of the current browser viewport.\n* `left_click`: Click the left mouse button at the specified coordinate or element reference.\n* `right_click`: Click the right mouse button at the specified coordinate or element reference.\n* `middle_click`: Click the middle mouse button at the specified coordinate or element reference.\n* `double_click`: Double-click the left mouse button at the specified coordinate or element reference.\n* `triple_click`: Triple-click the left mouse button at the specified coordinate or element reference.\n* `hover`: Move the mouse cursor to the specified coordinate or element reference without clicking. Useful for revealing tooltips, dropdown menus, or triggering hover states.\n* `left_click_drag`: Click and drag from start_coordinate to coordinate.\n* `left_mouse_down`: Press and hold the left mouse button at the specified coordinate.\n* `left_mouse_up`: Release the left mouse button at the specified coordinate.\n* `scroll`: Scroll the page in a specified direction.\n* `scroll_to`: Scroll to bring an element into view.\n* `type`: Type text at the current cursor position.\n* `key`: Press a key or key combination (supports standard keys and modifiers).\n* `hold_key`: Hold down a key or key combination for a specified duration.\n* `read_page`: Get the DOM tree structure, optionally filtered for interactive elements.\n* `find`: Find text on the page and highlight matches.\n* `get_page_text`: Get all text content from the page.\n* `wait`: Wait for a specified duration in seconds.\n* `form_input`: Set the value of a form input element.\n* `zoom`: Take a zoomed screenshot of a specific region.\n* `execute_js`: Execute JavaScript code in the page context. Returns the result of the last expression.',
+                "description": 'The action to perform. The available actions are:\n* `navigate`: Navigate to a URL or use "back"/"forward" for browser history navigation. Automatically includes a screenshot of the loaded page.\n* `screenshot`: Take a screenshot of the current browser viewport.\n* `left_click`: Click the left mouse button at the specified coordinate or element reference.\n* `right_click`: Click the right mouse button at the specified coordinate or element reference.\n* `middle_click`: Click the middle mouse button at the specified coordinate or element reference.\n* `double_click`: Double-click the left mouse button at the specified coordinate or element reference.\n* `triple_click`: Triple-click the left mouse button at the specified coordinate or element reference.\n* `hover`: Move the mouse cursor to the specified coordinate or element reference without clicking. Useful for revealing tooltips, dropdown menus, or triggering hover states.\n* `left_click_drag`: Click and drag from start_coordinate to coordinate.\n* `left_mouse_down`: Press and hold the left mouse button at the specified coordinate.\n* `left_mouse_up`: Release the left mouse button at the specified coordinate.\n* `scroll`: Scroll the page in a specified direction.\n* `scroll_to`: Scroll to bring an element into view.\n* `type`: Type text at the current cursor position.\n* `key`: Press a key or key combination (supports standard keys and modifiers).\n* `hold_key`: Hold down a key or key combination for a specified duration.\n* `read_page`: Get the DOM tree structure, optionally filtered for interactive elements.\n* `find`: Find text on the page and highlight matches.\n* `get_page_text`: Get all text content from the page.\n* `wait`: Wait for a specified duration in seconds.\n* `form_input`: Set the value of a form input element.\n* `zoom`: Take a zoomed screenshot of a specific region.\n* `execute_js`: Execute JavaScript code in the page context. Returns the result of the last expression.\n* `refresh`: Refresh the current page to ensure the information is up to date.',
                 "enum": [
                     "navigate",
                     "screenshot",
@@ -95,6 +96,7 @@ If DOM-based actions (refs) aren't working, fall back to screenshot + coordinate
                     "form_input",
                     "zoom",
                     "execute_js",
+                    "refresh",
                 ],
                 "type": "string",
             },
@@ -155,7 +157,8 @@ If DOM-based actions (refs) aren't working, fall back to screenshot + coordinate
     - type: Enter text at cursor
     - scroll: Scroll the page
     - form_input: Fill form fields
-    - execute_js: Run JavaScript in page context"""
+    - execute_js: Run JavaScript in page context
+    - refresh: Reload the page to see the latest content """
 
     def __init__(
         self,
@@ -184,7 +187,6 @@ If DOM-based actions (refs) aren't working, fall back to screenshot + coordinate
         self.fn_call_template = fn_call_template
         self.model_call_timeout = model_call_timeout
         self.max_rounds = max_rounds
-        self.max_url_chars = self.MAX_URL_LENGTH
         if save_screenshots and self.downloads_folder is None:
             assert False, "downloads_folder must be set if save_screenshots is True"
         self.save_screenshots = save_screenshots
@@ -606,10 +608,10 @@ If DOM-based actions (refs) aren't working, fall back to screenshot + coordinate
 
             if scroll_direction == "up":
                 action_description = "Scrolled up one page"
-                self._playwright_controller.page_up()
+                await self._playwright_controller.page_up(self._page)
             elif scroll_direction == "down":
                 action_description = "Scrolled down one page"
-                self._playwright_controller.page_down()
+                await self._playwright_controller.page_down(self._page)
 
         # If other directions are needed, they can be implemented here
 
@@ -694,6 +696,9 @@ If DOM-based actions (refs) aren't working, fall back to screenshot + coordinate
                 self._page, js_code
             )
             action_description = f"Executed JavaScript code. Result: {js_result}"
+        elif args["action"] == "refresh":
+            await self._playwright_controller.refresh_page(self._page)
+            action_description = "Refreshed the current page."
 
         elif args["action"] == "read_page":
             dom_tree = await self._playwright_controller.get_page_dom(self._page)
